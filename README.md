@@ -22,6 +22,8 @@ Tested in Argentina (UHF 14–51, 6 MHz, H.264 + AAC). Other ISDB-Tb countries t
 2. **Install the app.** Download `Stick TV Player_<version>_x64-setup.exe` from
    [Releases](../../releases) and run it. It installs for the current user, no admin rights needed. The installer
    isn't code-signed, so SmartScreen may say "Windows protected your PC": click *More info → Run anyway*.
+   To run it without installing, download `stick-tv-player_<version>_x64-portable.zip` instead, unzip it anywhere
+   and run `stick-tv-player.exe`.
 
 ## Using it
 
