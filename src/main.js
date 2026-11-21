@@ -12,6 +12,14 @@ const state = {
   playToken: 0, // guards against out-of-order play() results when zapping quickly
   scanning: false,
   osdTimer: null,
+  mode: "web", // "mpv": native mpv window over the video area; "web": <video> fed by the ffmpeg transcode
+  info: { mpv: null, ffmpeg: null },
+  playing: false, // the backend is streaming a channel
+  mpvPlaying: false, // mpv shows video
+  hwdec: null,
+  muted: false,
+  fullscreen: false,
+  encoder: "",
 };
 
 // ------------------------------------------------------------------ helpers
@@ -41,11 +49,72 @@ function recall(k) {
 function showMessage(title, sub = "") {
   $("message").classList.remove("hidden");
   $("message").innerHTML = `<div class="message-title">${esc(title)}</div><div class="message-sub">${esc(sub)}</div>`;
+  updateView();
 }
 
 function hideMessage() {
   $("message").classList.add("hidden");
+  updateView();
 }
+
+// ------------------------------------------------------------------ mpv video window
+
+let lastView = "";
+
+/** Keeps mpv's native window on top of the video area; hidden while a message (or no video) should show instead. */
+function updateView(force = false) {
+  if (state.mode !== "mpv" && !force) return;
+  const visible =
+    state.mode === "mpv" && state.mpvPlaying && $("message").classList.contains("hidden") && $("scan-dialog").classList.contains("hidden");
+  const r = $("video-wrap").getBoundingClientRect();
+  const d = window.devicePixelRatio || 1;
+  const v = { x: Math.round(r.left * d), y: Math.round(r.top * d), w: Math.round(r.width * d), h: Math.round(r.height * d), visible };
+  const k = JSON.stringify(v);
+  if (k === lastView) return;
+  lastView = k;
+  invoke("mpv_view", v).catch(() => {});
+}
+
+new ResizeObserver(() => updateView()).observe($("video-wrap"));
+window.addEventListener("resize", () => updateView());
+
+function osdText(ch) {
+  return `${ch.virtual_number || `UHF ${ch.physical}`}  ${ch.name}`;
+}
+
+function mpvLabel() {
+  return state.hwdec ? `mpv · ${state.hwdec === "no" ? "CPU decode" : state.hwdec}` : "mpv";
+}
+
+function updateRateLabel(mbit, dropped) {
+  const parts = [];
+  if (mbit != null) parts.push(`${mbit.toFixed(1)} Mbit/s`);
+  if (dropped) parts.push(`dropped ${dropped}`);
+  if (state.encoder) parts.push(state.encoder);
+  $("rate").textContent = parts.join(" · ") || "–";
+}
+
+listen("mpv-event", (ev) => {
+  const e = ev.payload;
+  if (e.event === "key") {
+    handleKey(e.key);
+  } else if (e.event === "hwdec") {
+    state.hwdec = e.value;
+    if (state.mode === "mpv") state.encoder = mpvLabel();
+  } else if (state.mode !== "mpv" || !state.current) {
+    // the rest only matters while mpv plays a channel
+  } else if (e.event === "playing") {
+    state.mpvPlaying = true;
+    hideMessage();
+    invoke("mpv_osd", { text: osdText(state.current) }).catch(() => {});
+  } else if (e.event === "error") {
+    state.mpvPlaying = false;
+    showMessage("Playback error (mpv)", e.detail);
+  } else if (e.event === "exit") {
+    state.mpvPlaying = false;
+    showMessage("mpv closed", "Pick the channel again to restart it.");
+  }
+});
 
 /** Sorted for display: by virtual number when known, else physical channel then service id. */
 function sortChannels(list) {
@@ -136,6 +205,7 @@ function setChannels(list, scannedAt) {
 // ------------------------------------------------------------------ playback
 
 function destroyPlayer() {
+  state.mpvPlaying = false;
   const p = state.player;
   state.player = null;
   if (!p) return;
@@ -171,21 +241,32 @@ async function play(ch) {
   showMessage(`Tuning ${ch.name}…`, `UHF ${ch.physical} · ${(ch.freq_khz / 1000).toFixed(3)} MHz`);
   let res;
   try {
-    res = await invoke("play", { freqKhz: ch.freq_khz, serviceId: ch.service_id });
+    res = await invoke("play", { freqKhz: ch.freq_khz, serviceId: ch.service_id, mode: state.mode });
   } catch (e) {
     if (token !== state.playToken) return;
+    state.playing = false;
     showMessage("Could not tune", String(e));
     refreshDevice();
     return;
   }
   if (token !== state.playToken) return;
-  state.encoder = { h264_nvenc: "NVENC", h264_qsv: "Quick Sync", h264_amf: "AMF", libx264: "x264 (CPU)" }[res.encoder] || res.encoder;
+  state.playing = true;
+  if (res.encoder === "mpv") {
+    state.encoder = mpvLabel();
+  } else {
+    const names = { h264_nvenc: "NVENC", h264_qsv: "Quick Sync", h264_amf: "AMF", libx264: "x264 (CPU)" };
+    state.encoder = `ffmpeg · ${names[res.encoder] || res.encoder}`;
+  }
   if (!res.locked) {
     showMessage("No signal", "The tuner did not lock on this channel. Check the antenna; it keeps trying.");
   } else {
     showMessage("Waiting for video…");
   }
-  startPlayer(res.url, token);
+  if (state.mode === "mpv") {
+    invoke("mpv_mute", { muted: state.muted }).catch(() => {});
+  } else {
+    startPlayer(res.url, token);
+  }
 }
 
 function startPlayer(url, token) {
@@ -222,7 +303,7 @@ function startPlayer(url, token) {
   if (tryPlay) {
     tryPlay.catch(() => {
       // autoplay with sound refused: play muted and offer to unmute
-      video.muted = true;
+      setMuted(true);
       $("unmute").classList.remove("hidden");
       video.play().catch(() => {});
     });
@@ -236,7 +317,9 @@ function restartPlayer(url, token) {
 
 async function stopPlayback() {
   state.playToken++;
+  state.playing = false;
   destroyPlayer();
+  updateView();
   try {
     await invoke("stop");
   } catch {}
@@ -247,30 +330,30 @@ video.addEventListener("waiting", () => {
   if (state.current) showMessage("Buffering…");
 });
 
-$("unmute").onclick = () => {
-  video.muted = false;
-  $("unmute").classList.add("hidden");
-  updateMuteButton();
-};
-
-function updateMuteButton() {
-  $("mute-btn").textContent = video.muted ? "🔇" : "🔊";
+function setMuted(m) {
+  state.muted = m;
+  video.muted = m;
+  if (!m) $("unmute").classList.add("hidden");
+  $("mute-btn").textContent = m ? "🔇" : "🔊";
+  if (state.mode === "mpv") invoke("mpv_mute", { muted: m }).catch(() => {});
 }
 
-$("mute-btn").onclick = () => {
-  video.muted = !video.muted;
-  if (!video.muted) $("unmute").classList.add("hidden");
-  updateMuteButton();
-};
+$("unmute").onclick = () => setMuted(false);
+$("mute-btn").onclick = () => setMuted(!state.muted);
+
+/** Fullscreen is the window's (not the page element's), so mpv's native window can fill the screen too. */
+function setFullscreen(on) {
+  state.fullscreen = on;
+  document.body.classList.toggle("fs", on);
+  invoke("set_fullscreen", { on }).catch(() => {});
+}
 
 function toggleFullscreen() {
-  const wrap = $("video-wrap");
-  if (document.fullscreenElement) document.exitFullscreen();
-  else wrap.requestFullscreen().catch(() => {});
+  setFullscreen(!state.fullscreen);
 }
 
 $("fs-btn").onclick = toggleFullscreen;
-video.ondblclick = toggleFullscreen;
+$("video-wrap").ondblclick = toggleFullscreen;
 
 function zap(delta) {
   const list = orderedChannels();
@@ -280,21 +363,28 @@ function zap(delta) {
   play(list[i]);
 }
 
+/** Keys from the page and from mpv's window (forwarded as "up", "down", "f", "m", "i", "esc"). */
+function handleKey(k) {
+  if (state.scanning) return false;
+  if (k === "up") zap(-1);
+  else if (k === "down") zap(1);
+  else if (k === "f") toggleFullscreen();
+  else if (k === "esc") {
+    if (state.fullscreen) setFullscreen(false);
+  } else if (k === "m") setMuted(!state.muted);
+  else if (k === "i") {
+    if (!state.current) return true;
+    showOsd(state.current);
+    if (state.mode === "mpv" && state.mpvPlaying) invoke("mpv_osd", { text: osdText(state.current) }).catch(() => {});
+  } else return false;
+  return true;
+}
+
+const KEYS = { ArrowUp: "up", PageUp: "up", ArrowDown: "down", PageDown: "down", f: "f", F: "f", m: "m", M: "m", i: "i", I: "i", Escape: "esc" };
+
 document.addEventListener("keydown", (e) => {
-  if (state.scanning) return;
-  if (e.key === "ArrowUp" || e.key === "PageUp") {
-    zap(-1);
-    e.preventDefault();
-  } else if (e.key === "ArrowDown" || e.key === "PageDown") {
-    zap(1);
-    e.preventDefault();
-  } else if (e.key === "f" || e.key === "F") {
-    toggleFullscreen();
-  } else if (e.key === "m" || e.key === "M") {
-    $("mute-btn").click();
-  } else if (e.key === "i" || e.key === "I") {
-    if (state.current) showOsd(state.current);
-  }
+  if (e.target.tagName === "SELECT") return;
+  if (KEYS[e.key] && handleKey(KEYS[e.key])) e.preventDefault();
 });
 
 // ------------------------------------------------------------------ signal meters
@@ -328,15 +418,17 @@ listen("signal", (ev) => {
   const lock = $("lock");
   lock.textContent = sig.locked ? (sig.dbm != null ? `Locked · ${sig.dbm} dBm` : "Locked") : "No lock";
   lock.className = `stat ${sig.locked ? "ok" : "bad"}`;
-  $("rate").textContent = `${s.mbit.toFixed(1)} Mbit/s${s.dropped ? ` · dropped ${s.dropped}` : ""}${state.encoder ? ` · ${state.encoder}` : ""}`;
+  updateRateLabel(s.mbit, s.dropped);
   if (!s.streaming && sig.locked && !$("message").classList.contains("hidden")) {
     showMessage("Waiting for the service…", "Looking for this channel's program table in the stream.");
   }
 });
 
 listen("player-error", (ev) => {
-  showMessage("The stick stopped streaming", `${ev.payload}\nIs it still plugged in?`);
+  state.playing = false;
   destroyPlayer();
+  if (state.mode === "mpv") invoke("stop").catch(() => {});
+  showMessage("The stick stopped streaming", `${ev.payload}\nIs it still plugged in?`);
   refreshDevice();
 });
 
@@ -356,6 +448,7 @@ async function startScan() {
   $("scan-found").innerHTML = "";
   $("scan-cancel").textContent = "Cancel";
   $("scan-dialog").classList.remove("hidden");
+  updateView();
   await invoke("start_scan", {});
 }
 
@@ -403,6 +496,7 @@ $("scan-cancel").onclick = async () => {
     await invoke("stop");
   } else {
     $("scan-dialog").classList.add("hidden");
+    updateView();
   }
 };
 
@@ -410,7 +504,40 @@ $("scan-btn").onclick = startScan;
 
 // ------------------------------------------------------------------ startup
 
+// ------------------------------------------------------------------ player selection
+
+function setMode(mode) {
+  state.mode = mode;
+  $("mode").value = mode;
+  video.classList.toggle("hidden", mode === "mpv");
+  store("mode", mode);
+}
+
+$("mode").onchange = async () => {
+  const mode = $("mode").value;
+  const ch = state.current;
+  await stopPlayback();
+  setMode(mode);
+  updateView(true); // hides the mpv window when leaving mpv
+  if (ch) play(ch);
+};
+
+async function initModes() {
+  try {
+    state.info = await invoke("player_info");
+  } catch {}
+  const opt = (v) => $("mode").querySelector(`option[value="${v}"]`);
+  opt("mpv").disabled = !state.info.mpv;
+  opt("mpv").textContent = state.info.mpv ? "Player: mpv" : "Player: mpv (not found)";
+  opt("web").disabled = !state.info.ffmpeg;
+  opt("web").textContent = state.info.ffmpeg ? "Player: built-in (ffmpeg)" : "Player: built-in (ffmpeg not found)";
+  const saved = recall("mode");
+  const ok = (m) => (m === "mpv" ? state.info.mpv : m === "web" ? state.info.ffmpeg : null);
+  setMode(ok(saved) ? saved : state.info.mpv ? "mpv" : "web");
+}
+
 async function init() {
+  await initModes();
   const st = await refreshDevice();
   const file = await invoke("load_channels");
   setChannels(file.channels || [], file.scanned_at);
@@ -429,7 +556,7 @@ async function init() {
   }
   // keep the device pill current (plug / unplug); not while streaming (unplug then shows as a player error)
   setInterval(() => {
-    if (!state.scanning && !state.player) refreshDevice();
+    if (!state.scanning && !state.playing) refreshDevice();
   }, 5000);
 }
 

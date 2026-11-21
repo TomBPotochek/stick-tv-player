@@ -1,7 +1,11 @@
 //! Tauri backend: owns the USB stick, runs scans and playback on a worker thread, and serves the filtered TS of the
 //! channel being watched over local HTTP (see `hub`).
+//!
+//! Two players: mpv in a native child window (`mpv`, the stream as broadcast) or the webview's `<video>` fed by an
+//! ffmpeg transcode (`transcode`, for when mpv isn't installed).
 
 mod hub;
+mod mpv;
 mod transcode;
 
 use hub::Hub;
@@ -28,6 +32,7 @@ struct AppState {
     hub: Arc<Hub>,
     port: u16,
     data_dir: PathBuf,
+    mpv: mpv::MpvHost,
 }
 
 impl AppState {
@@ -177,13 +182,50 @@ fn start_scan(app: AppHandle, state: State<'_, Arc<AppState>>, from: Option<u8>,
 #[tauri::command]
 fn stop(state: State<'_, Arc<AppState>>) {
     state.stop_job();
+    state.mpv.stop();
+}
+
+#[derive(Serialize)]
+struct PlayerInfo {
+    /// mpv executable, when mpv playback is possible here.
+    mpv: Option<String>,
+    ffmpeg: Option<String>,
+}
+
+#[tauri::command]
+fn player_info() -> PlayerInfo {
+    PlayerInfo {
+        mpv: mpv::available().map(|p| p.display().to_string()),
+        ffmpeg: transcode::find_ffmpeg().map(|p| p.display().to_string()),
+    }
+}
+
+/// Places the mpv video window over the page's video area (physical pixels), or hides it.
+#[tauri::command]
+fn mpv_view(state: State<'_, Arc<AppState>>, x: i32, y: i32, w: i32, h: i32, visible: bool) {
+    state.mpv.set_view(x, y, w, h, visible);
+}
+
+#[tauri::command]
+fn mpv_mute(state: State<'_, Arc<AppState>>, muted: bool) {
+    state.mpv.set_mute(muted);
+}
+
+#[tauri::command]
+fn mpv_osd(state: State<'_, Arc<AppState>>, text: String) {
+    state.mpv.show_text(&text);
+}
+
+#[tauri::command]
+fn set_fullscreen(window: tauri::WebviewWindow, on: bool) -> Result<(), String> {
+    window.set_fullscreen(on).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
 struct PlayResult {
     locked: bool,
     url: String,
-    /// ffmpeg video encoder in use (h264_nvenc, h264_qsv, h264_amf or libx264).
+    /// "mpv", or the ffmpeg video encoder in use (h264_nvenc, h264_qsv, h264_amf or libx264).
     encoder: String,
 }
 
@@ -203,11 +245,15 @@ async fn play(
     state: State<'_, Arc<AppState>>,
     freq_khz: u32,
     service_id: u16,
+    mode: Option<String>,
 ) -> Result<PlayResult, String> {
     let st = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || play_blocking(app, st, freq_khz, service_id))
-        .await
-        .map_err(|e| e.to_string())?
+    let use_mpv = mode.as_deref() == Some("mpv");
+    tauri::async_runtime::spawn_blocking(move || {
+        play_blocking(app, st, freq_khz, service_id, use_mpv)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn play_blocking(
@@ -215,11 +261,20 @@ fn play_blocking(
     st: Arc<AppState>,
     freq_khz: u32,
     sid: u16,
+    use_mpv: bool,
 ) -> Result<PlayResult, String> {
     st.stop_job();
-    let ffmpeg = transcode::find_ffmpeg()
-        .ok_or("ffmpeg not found: it should be installed next to the app, or put ffmpeg.exe on PATH (see README)")?;
-    let enc: &'static transcode::Encoder = transcode::encoder(&ffmpeg);
+    // mpv: the filtered TS goes to the hub as is. Otherwise: through ffmpeg (transcode) to the hub.
+    let ffmpeg = if use_mpv {
+        st.mpv.ensure(&app, &st.data_dir)?;
+        None
+    } else {
+        let f = transcode::find_ffmpeg()
+            .ok_or("ffmpeg not found: it should be installed next to the app, or put ffmpeg.exe on PATH (see README)")?;
+        let enc: &'static transcode::Encoder = transcode::encoder(&f);
+        Some((f, enc))
+    };
+    let enc_name = ffmpeg.as_ref().map(|(_, e)| e.name);
     // One retry with a freshly opened device: the stick may have been replugged since the last use.
     let (dev, locked) = match st.device().and_then(|d| {
         d.tune(freq_khz, false)
@@ -275,19 +330,25 @@ fn play_blocking(
                 );
             }
         });
-        let mut tc = match transcode::Transcoder::start(&ffmpeg, enc, move |ts| hub.broadcast(ts)) {
-            Ok(t) => t,
-            Err(e) => {
-                c2.store(true, Ordering::SeqCst);
-                let _ = monitor.join();
-                let _ = app.emit(
-                    "player-error",
-                    format!("cannot start ffmpeg ({}): {e}", ffmpeg.display()),
-                );
-                return;
+        let mut tc = match &ffmpeg {
+            None => None,
+            Some((path, enc)) => {
+                let hub = hub.clone();
+                match transcode::Transcoder::start(path, enc, move |ts| hub.broadcast(ts)) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        c2.store(true, Ordering::SeqCst);
+                        let _ = monitor.join();
+                        let _ = app.emit(
+                            "player-error",
+                            format!("cannot start ffmpeg ({}): {e}", path.display()),
+                        );
+                        return;
+                    }
+                }
             }
         };
-        let ff_log = tc.log.clone();
+        let ff_log = tc.as_ref().map(|t| t.log.clone());
         let mut ffmpeg_died = false;
         let mut pk = Packetizer::default();
         let mut demux = Demux::new();
@@ -303,9 +364,17 @@ fn play_blocking(
                 if filter.is_ready() {
                     r2.store(true, Ordering::SeqCst);
                 }
-                if !out.is_empty() && !tc.write(&out) {
-                    ffmpeg_died = true;
-                    return false;
+                if out.is_empty() {
+                    return true;
+                }
+                match tc.as_mut() {
+                    Some(t) => {
+                        if !t.write(&out) {
+                            ffmpeg_died = true;
+                            return false;
+                        }
+                    }
+                    None => hub.broadcast(out),
                 }
                 true
             },
@@ -318,7 +387,9 @@ fn play_blocking(
             st2.drop_device();
             let _ = app.emit("player-error", e.to_string());
         } else if ffmpeg_died && !stopped {
-            let log = ff_log.lock().unwrap().trim().to_string();
+            let log = ff_log
+                .map(|l| l.lock().unwrap().trim().to_string())
+                .unwrap_or_default();
             let _ = app.emit("player-error", format!("ffmpeg stopped: {log}"));
         }
     });
@@ -327,10 +398,18 @@ fn play_blocking(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
+    let url = format!("http://127.0.0.1:{}/live.ts?sid={sid}&t={t}", st.port);
+    let encoder = match enc_name {
+        None => {
+            st.mpv.load(&url);
+            "mpv".to_string()
+        }
+        Some(name) => name.to_string(),
+    };
     Ok(PlayResult {
-        encoder: enc.name.to_string(),
+        encoder,
         locked,
-        url: format!("http://127.0.0.1:{}/live.ts?sid={sid}&t={t}", st.port),
+        url,
     })
 }
 
@@ -346,6 +425,7 @@ pub fn run() {
                 hub,
                 port,
                 data_dir,
+                mpv: mpv::MpvHost::default(),
             }));
             Ok(())
         })
@@ -354,7 +434,12 @@ pub fn run() {
             load_channels,
             start_scan,
             stop,
-            play
+            play,
+            player_info,
+            mpv_view,
+            mpv_mute,
+            mpv_osd,
+            set_fullscreen
         ])
         .build(tauri::generate_context!())
         .expect("error while building the app");
@@ -362,6 +447,7 @@ pub fn run() {
         if let RunEvent::Exit = ev {
             if let Some(st) = handle.try_state::<Arc<AppState>>() {
                 st.stop_job();
+                st.mpv.shutdown();
                 st.drop_device();
             }
         }

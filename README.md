@@ -2,7 +2,8 @@
 
 A small desktop app for watching ISDB-T (ISDB-Tb) TV from portable USB tuner sticks built on the
 **ITE IT9175**. It scans channels, lists them and plays live TV. There's no vendor app and no JRE: it's one
-Rust binary with a web UI (Tauri), plus **ffmpeg** for the video (see [Why ffmpeg](#why-ffmpeg)).
+Rust binary with a web UI (Tauri). Video plays in **mpv**, embedded in the window, or, without mpv, in the web
+UI through an **ffmpeg** transcode (see [Players](#players-mpv-or-built-in)).
 
 | Stick | USB id | Vendor driver it replaces |
 |---|---|---|
@@ -18,14 +19,19 @@ Windows only for now. The code is portable, and Linux needs only a udev rule (se
 ## Using it
 
 1. Bind the WinUSB driver to the stick with Zadig (one time, see below).
-2. Make sure `ffmpeg.exe` (with libx264, e.g. `winget install Gyan.FFmpeg`) is on PATH. Skip this if the
-   installer was built with ffmpeg bundled (see Building).
+2. Install a player backend. Either works; with both, you pick one in the top bar.
+   - **mpv** (recommended): `mpv.exe` on PATH (e.g. `winget install mpv`, or a build from
+     [mpv.io](https://mpv.io/installation/)), or next to the app's executable. The broadcast plays as is, decoded on
+     the GPU.
+   - **ffmpeg**: `ffmpeg.exe` on PATH (e.g. `winget install Gyan.FFmpeg`), or bundled into the installer (see
+     Building). Needed only when there's no mpv.
 3. Install and start **Stick TV Player**.
 4. Click **Scan channels**. It tries UHF 14–51 (~1.5 s per empty channel, a few seconds per multiplex).
    The list is saved and reloaded on the next start.
 5. Click a channel. Full-seg (HD/SD) and one-seg (mobile, low resolution) services are listed separately.
 
-Keys: **↑/↓** zap, **F** or double-click for fullscreen, **M** mute, **I** channel info.
+Keys: **↑/↓** zap, **F** or double-click for fullscreen, **Esc** leave fullscreen, **M** mute, **I** channel info.
+They work whether the focus is on the list or on the video.
 The status bar shows signal strength, quality, lock/dBm and the multiplex bitrate.
 
 The app remembers the last channel and tunes it at startup if the stick is plugged in.
@@ -73,6 +79,9 @@ cargo test -p stick-tuner   # driver tests (no hardware needed)
 
 libusb is compiled from source and linked statically (`rusb` with the `vendored` feature), so no DLL is shipped.
 
+mpv isn't bundled (the Windows builds are ~110 MB). The app looks for it in `STICK_TV_MPV`, next to its own
+executable (also `mpv\mpv.exe` there), then on PATH.
+
 **Bundling ffmpeg (optional).** At run time the app looks for `ffmpeg.exe` next to its own executable, then on PATH.
 To ship it inside the installer, run `powershell -File tools/fetch-ffmpeg.ps1`, which downloads the static
 "essentials" build from gyan.dev (GPL, includes libx264) to `src-tauri/binaries/` (gitignored), and build with
@@ -101,6 +110,8 @@ port reset.
   OpenDTV) don't revive it, so unplug the stick and plug it back in.
 - **Channels lock but no services are found**: the signal is too weak (quality shows a few %). Move the antenna
   and rescan.
+- **"Waiting for the service…" forever**: same cause, on a channel that was found earlier. Check the quality meter.
+- **Status bar says "mpv · CPU decode"**: mpv couldn't use the GPU decoder. Playback still works, with more CPU.
 
 ## How it works
 
@@ -111,8 +122,11 @@ port reset.
  EP 0x81 cmd IN   ──►│ usb: fw download, init, tune     │ │ stop, device_status  │ │ signal meters     │
                      │ it9175: tuner/demod logic        │ │                      │ │                   │
  EP 0x84 TS IN    ──►│ usb::stream: 16×64 KiB async URBs├►│ demux → ServiceFilter├►│ mpegts.js (MSE)   │
-                     │ ts: PAT/PMT/SDT/NIT, filter      │ │ → ffmpeg → 127.0.0.1 │ │ <video>           │
-                     └──────────────────────────────────┘ └──────────────────────┘ └───────────────────┘
+                     │ ts: PAT/PMT/SDT/NIT, filter      │ │ → 127.0.0.1/live.ts  │ │ <video>           │
+                     └──────────────────────────────────┘ └──┬────────▲──────────┘ └───────────────────┘
+                                                              │ mpv    │ ffmpeg (built-in player only)
+                                                              ▼ (IPC)  │
+                                                   mpv.exe in a child window over the video area
 ```
 
 - **Driver.** `crates/tuner` is a Rust port of the pure-Java IT9175 driver in
@@ -126,12 +140,28 @@ port reset.
   (`tests/golden/tuner_golden.txt` for libpt275aDrv / PT275, `tuner_golden_ptx1.txt` for libPTx1Drv / PT275C).
   All 80 + 80 scenarios produce the identical register-write sequence.
 - **Playback.** The stick sends the whole multiplex (hardware PID filter off). The backend demuxes it and keeps
-  only the chosen service (its PMT, PCR, video, audio) behind a single-program PAT. ffmpeg deinterlaces and
-  re-encodes the video, the result is served as a chunked `video/mp2t` stream on `127.0.0.1`, and
-  [mpegts.js](https://github.com/xqq/mpegts.js) remuxes it to fMP4 for Media Source Extensions in the webview.
-  Audio (AAC-LATM) is passed through, since mpegts.js handles LATM.
+  only the chosen service (its PMT, PCR, video, audio) behind a single-program PAT, served as a chunked
+  `video/mp2t` stream on `127.0.0.1`. From there, one of two players takes it (below).
 
-### Why ffmpeg
+## Players: mpv or built-in
+
+**mpv** (`src-tauri/src/mpv.rs`). The app creates a native child window over the page's video area and starts one
+`mpv --wid=<that window>` process, idle between channels and driven over its JSON IPC pipe (`loadfile` on each
+channel change, mute, OSD text). mpv plays the service's TS untouched: GPU decode (`--hwdec=auto-safe`, d3d11va
+here), deinterlacing only frames flagged interlaced (`--deinterlace=auto`). The page keeps the video area's
+position in sync and hides the window while it shows a message ("Tuning…", "No signal"), so HTML is never drawn
+over the video; the channel name on zapping is mpv's OSD. mpv's default key bindings are off and the app's keys are
+bound to `script-message`s that come back over IPC, so ↑/↓, F, M, I and Esc work with the focus on the video.
+One mpv option matters: the first pictures after tuning can't be decoded (open GOP, see below), and with the
+default `--hwdec-software-fallback=3` mpv would drop to software decoding for the whole channel, so it's set to 250.
+On the test machine (GTX 1660 Ti), C5N (576i) takes ~3% of one CPU core in mpv. The window is Windows-only for
+now (`--wid` with an HWND); on Linux the selector offers only the built-in player.
+
+**Built-in** (`src-tauri/src/transcode.rs`). For when mpv isn't installed: ffmpeg re-encodes the video, and
+[mpegts.js](https://github.com/xqq/mpegts.js) remuxes the result to fMP4 for Media Source Extensions in the webview.
+Audio (AAC-LATM) is passed through, since mpegts.js handles LATM.
+
+### Why the built-in player re-encodes
 
 The plan was to hand the broadcast H.264 straight to the webview, but that fails on real Argentine channels.
 They send 576i/1080i as **field pictures** (PAFF), with open GOPs: the first pictures after each access point
@@ -150,8 +180,8 @@ to force one. CPU time for 5.4 s of 576i on a GTX 1660 Ti machine:
 | h264_qsv, GPU decode | 0.61 s | 11% |
 | h264_nvenc, GPU decode | 0.31 s | 6% |
 
-Picture appears ~4–5 s after a channel change. The way to avoid re-encoding altogether is a native video
-surface (e.g. embedding mpv) instead of the webview's `<video>`.
+In the app, during live playback, ffmpeg with NVENC took ~10% of one core. Picture appears ~4–5 s after a
+channel change in both players; most of that is tuning, finding the PMT and waiting for the next access point.
 
 ## ITE firmware (please read)
 

@@ -220,3 +220,19 @@ body { display: flex; flex-direction: column; }
 .scan-found div { padding: 2px 0; }
 .scan-found .ch { color: var(--muted); display: inline-block; min-width: 60px; }
 .dialog-actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
+
+/* player selector */
+.select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+/* fullscreen (the window goes fullscreen; only the video area stays) */
+body.fs .topbar,
+body.fs .sidebar,
+body.fs .statusbar { display: none; }
+body.fs .video-wrap { border-radius: 0; }
