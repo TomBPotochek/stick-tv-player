@@ -7,15 +7,28 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand">Stick TV Player</div>
+    <!-- The window has no OS frame: this bar is the title bar (drag to move, double-click to maximize). -->
+    <header class="topbar" data-tauri-drag-region>
+      <img class="app-icon" src="/app-icon.svg" alt="" data-tauri-drag-region />
+      <div class="brand" data-tauri-drag-region>Stick TV Player</div>
       <div id="device" class="pill">Looking for the stick…</div>
-      <div class="spacer"></div>
+      <div class="spacer" data-tauri-drag-region></div>
       <select id="mode" class="select" title="Player">
         <option value="mpv">Player: mpv</option>
         <option value="web">Player: built-in (ffmpeg)</option>
       </select>
       <button id="scan-btn" class="btn">Scan channels</button>
+      <div class="win-controls">
+        <button id="win-min" class="win-btn" title="Minimize" aria-label="Minimize">
+          <svg viewBox="0 0 10 10"><path d="M0 5.5h10" /></svg>
+        </button>
+        <button id="win-max" class="win-btn" title="Maximize" aria-label="Maximize">
+          <svg viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" /></svg>
+        </button>
+        <button id="win-close" class="win-btn close" title="Close" aria-label="Close">
+          <svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" /></svg>
+        </button>
+      </div>
     </header>
 
     <main class="layout">

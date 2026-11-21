@@ -16,7 +16,8 @@
         "width": 1180,
         "height": 720,
         "minWidth": 720,
-        "minHeight": 420
+        "minHeight": 420,
+        "decorations": false
       }
     ],
     "security": {
@@ -25,7 +26,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

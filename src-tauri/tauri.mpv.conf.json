@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "binaries/mpv/mpv.exe": "mpv/mpv.exe"
+    }
+  }
+}

@@ -34,11 +34,31 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 14px;
+  height: 46px;
+  flex: none;
+  padding: 0 0 0 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
+.app-icon { width: 20px; height: 20px; }
 .brand { font-weight: 600; letter-spacing: 0.2px; }
+
+/* window controls (the window has no OS title bar) */
+.win-controls { display: flex; align-self: stretch; margin-left: 4px; }
+.win-btn {
+  width: 46px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+.win-btn svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+.win-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.win-btn:active { background: rgba(255, 255, 255, 0.04); }
+.win-btn.close:hover { background: #c42b1c; color: #fff; }
+.win-btn.close:active { background: #b22a1d; }
 .pill {
   padding: 3px 10px;
   border-radius: 999px;

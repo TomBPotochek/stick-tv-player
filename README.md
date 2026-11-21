@@ -19,16 +19,18 @@ Windows only for now. The code is portable, and Linux needs only a udev rule (se
 ## Using it
 
 1. Bind the WinUSB driver to the stick with Zadig (one time, see below).
-2. Install a player backend. Either works; with both, you pick one in the top bar.
-   - **mpv** (recommended): `mpv.exe` on PATH (e.g. `winget install mpv`, or a build from
-     [mpv.io](https://mpv.io/installation/)), or next to the app's executable. The broadcast plays as is, decoded on
-     the GPU.
-   - **ffmpeg**: `ffmpeg.exe` on PATH (e.g. `winget install Gyan.FFmpeg`), or bundled into the installer (see
-     Building). Needed only when there's no mpv.
-3. Install and start **Stick TV Player**.
+2. Download `Stick TV Player_<version>_x64-setup.exe` from the repository's
+   [Releases](../../releases) and run it. It installs for the current user (no admin rights) and includes mpv.
+   The installer isn't code-signed, so Windows SmartScreen may warn ("Windows protected your PC"): click
+   *More info → Run anyway*.
+3. Start **Stick TV Player**.
 4. Click **Scan channels**. It tries UHF 14–51 (~1.5 s per empty channel, a few seconds per multiplex).
    The list is saved and reloaded on the next start.
 5. Click a channel. Full-seg (HD/SD) and one-seg (mobile, low resolution) services are listed separately.
+
+The top bar picks the player: **mpv** (default, bundled) or **built-in**, which needs `ffmpeg.exe` on PATH
+(e.g. `winget install Gyan.FFmpeg`). See [Players](#players-mpv-or-built-in). A build without the bundled mpv (a
+plain `npm run tauri build`) uses `mpv.exe` from PATH (e.g. `winget install mpv`).
 
 Keys: **↑/↓** zap, **F** or double-click for fullscreen, **Esc** leave fullscreen, **M** mute, **I** channel info.
 They work whether the focus is on the list or on the video.
@@ -72,15 +74,44 @@ WebView2 ships with Windows 10/11.
 
 ```
 npm install
-npm run tauri build      # installer: target/release/bundle/nsis/Stick TV Player_0.1.0_x64-setup.exe
-npm run tauri dev        # development, with hot reload of the UI
+npm run tauri dev           # development: debug build, hot reload of the UI, devtools (right-click → Inspect)
 cargo test -p stick-tuner   # driver tests (no hardware needed)
+
+# release installer with mpv bundled (what the GitHub release contains):
+powershell -File tools/fetch-mpv.ps1
+npm run tauri build -- --config src-tauri/tauri.mpv.conf.json
+#   → target/release/bundle/nsis/Stick TV Player_<version>_x64-setup.exe  (~34 MB)
+npm run tauri build         # same, without mpv (~2 MB; mpv then comes from PATH)
 ```
+
+`tauri build` is always a release build: optimized, and without the webview devtools (those exist only in debug
+builds unless the `devtools` Cargo feature is turned on). The frontend is built by Vite into `dist/` and embedded in
+the executable, so the app needs no files next to it apart from mpv. The installer is NSIS, per-user
+(`installMode: currentUser`), with a Start-menu entry and an uninstaller.
+
+### Releasing
+
+`.github/workflows/release.yml` does the above on GitHub's Windows runners:
+
+1. Set `version` in `src-tauri/tauri.conf.json` (and `package.json`, `Cargo.toml` if you like them to agree), commit.
+2. `git tag v0.2.0 && git push origin v0.2.0` (the tag should match that version).
+3. The workflow runs the driver tests, fetches mpv, builds the installer and creates a **draft** release with it.
+   Review it on GitHub and click *Publish*.
+
+Running the workflow by hand (*Actions → Release → Run workflow*) builds the installer as a workflow artifact
+without making a release. On a private repository the Windows runner minutes count double against the free quota.
+
+The installer isn't signed. Signing needs a code-signing certificate (or Azure Trusted Signing); Tauri picks it up
+from `bundle.windows.certificateThumbprint` / `signCommand`. Auto-update would be `tauri-plugin-updater` plus a
+signing key for update bundles; neither is set up.
 
 libusb is compiled from source and linked statically (`rusb` with the `vendored` feature), so no DLL is shipped.
 
-mpv isn't bundled (the Windows builds are ~110 MB). The app looks for it in `STICK_TV_MPV`, next to its own
-executable (also `mpv\mpv.exe` there), then on PATH.
+**Bundling mpv.** `tools/fetch-mpv.ps1` downloads a pinned build from
+[zhongfly/mpv-winbuild](https://github.com/zhongfly/mpv-winbuild) (checked by SHA-256) to `src-tauri/binaries/mpv/`
+(gitignored), and `tauri.mpv.conf.json` installs it as `mpv\mpv.exe` next to the app. At run time the app looks for
+mpv in `STICK_TV_MPV`, next to its own executable (also `mpv\mpv.exe` there), then on PATH. mpv is GPL-licensed
+(source: [mpv-player/mpv](https://github.com/mpv-player/mpv)); it runs as a separate program, not linked into the app.
 
 **Bundling ffmpeg (optional).** At run time the app looks for `ffmpeg.exe` next to its own executable, then on PATH.
 To ship it inside the installer, run `powershell -File tools/fetch-ffmpeg.ps1`, which downloads the static

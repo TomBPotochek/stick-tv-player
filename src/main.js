@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import mpegts from "mpegts.js";
 
 const $ = (id) => document.getElementById(id);
@@ -503,6 +504,27 @@ $("scan-cancel").onclick = async () => {
 $("scan-btn").onclick = startScan;
 
 // ------------------------------------------------------------------ startup
+
+// ------------------------------------------------------------------ title bar (frameless window)
+
+const appWindow = getCurrentWindow();
+const MAX_ICON = `<svg viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" /></svg>`;
+const RESTORE_ICON = `<svg viewBox="0 0 10 10"><rect x="0.5" y="2.5" width="7" height="7" /><path d="M2.5 2.5V0.5h7v7h-2" /></svg>`;
+
+$("win-min").onclick = () => appWindow.minimize();
+$("win-max").onclick = () => appWindow.toggleMaximize();
+$("win-close").onclick = () => appWindow.close();
+
+async function updateMaxButton() {
+  try {
+    const max = await appWindow.isMaximized();
+    $("win-max").innerHTML = max ? RESTORE_ICON : MAX_ICON;
+    $("win-max").title = max ? "Restore" : "Maximize";
+  } catch {}
+}
+
+appWindow.onResized(() => updateMaxButton());
+updateMaxButton();
 
 // ------------------------------------------------------------------ player selection
 
