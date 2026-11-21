@@ -30,7 +30,7 @@ Tested in Argentina (UHF 14–51, 6 MHz, H.264 + AAC). Other ISDB-Tb countries t
 2. Click a channel. Full-seg (HD/SD) and one-seg (mobile, low resolution) services are listed separately.
 
 The last channel is tuned again on the next start. The status bar shows signal strength, quality, lock/dBm,
-the multiplex bitrate and how the video is decoded.
+the multiplex bitrate, how the video is decoded, and the date and time sent by the station.
 
 | Key | |
 |---|---|

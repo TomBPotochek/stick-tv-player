@@ -1,7 +1,10 @@
 //! PSI/SI demux: learns the services of a multiplex from PAT, PMT, SDT and NIT.
 
 use super::section::SectionAssembler;
-use super::{decode_text, pid, PID_NIT, PID_NULL, PID_PAT, PID_SDT};
+use super::{
+    decode_text, parse_time_section, pid, BroadcastTime, PID_NIT, PID_NULL, PID_PAT, PID_SDT,
+    PID_TDT,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -98,6 +101,9 @@ pub struct Demux {
     pub packets: u64,
     pub tei_packets: u64,
     pub cc_errors: u64,
+    /// Latest broadcast date/time (TDT/TOT) and how many have been received.
+    pub time: Option<BroadcastTime>,
+    pub time_count: u64,
     last_cc: Vec<i8>,
 }
 
@@ -110,7 +116,7 @@ impl Default for Demux {
 impl Demux {
     pub fn new() -> Self {
         let mut assemblers = HashMap::new();
-        for p in [PID_PAT, PID_NIT, PID_SDT] {
+        for p in [PID_PAT, PID_NIT, PID_SDT, PID_TDT] {
             assemblers.insert(p, SectionAssembler::new());
         }
         Demux {
@@ -127,6 +133,8 @@ impl Demux {
             packets: 0,
             tei_packets: 0,
             cc_errors: 0,
+            time: None,
+            time_count: 0,
             last_cc: vec![-1; 0x2000],
         }
     }
@@ -175,6 +183,13 @@ impl Demux {
     }
 
     fn section(&mut self, p: u16, s: &[u8]) {
+        if p == PID_TDT {
+            if let Some(t) = parse_time_section(s) {
+                self.time = Some(t);
+                self.time_count += 1;
+            }
+            return;
+        }
         if s.len() < 12 {
             return;
         }

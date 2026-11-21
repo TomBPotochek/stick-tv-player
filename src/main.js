@@ -432,6 +432,7 @@ function resetMeters() {
   $("lock").textContent = "–";
   $("lock").className = "stat";
   $("rate").textContent = "–";
+  resetClock();
 }
 
 listen("signal", (ev) => {
@@ -447,6 +448,49 @@ listen("signal", (ev) => {
   if (!s.streaming && sig.locked && !$("message").classList.contains("hidden")) {
     showMessage("Waiting for the service…", "Looking for this channel's program table in the stream.");
   }
+});
+
+// ------------------------------------------------------------------ broadcast clock
+
+// The station sends its date and time (TDT/TOT) every few seconds, to the second. Between two of them the clock
+// counts on from the last one; it dims if none came for 30 s.
+const clock = { base: null, at: 0, table: 0, offset: null, timer: null };
+
+function pad(n, w = 2) {
+  return String(n).padStart(w, "0");
+}
+
+function renderClock() {
+  const el = $("clock");
+  if (!clock.base) {
+    el.textContent = "–";
+    el.classList.remove("stale");
+    return;
+  }
+  const age = performance.now() - clock.at;
+  const d = new Date(clock.base + Math.floor(age / 1000) * 1000); // fields read as UTC: no time-zone conversion
+  el.textContent = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  el.classList.toggle("stale", age > 30000);
+  const off = clock.offset == null ? "" : ` · offset ${clock.offset < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(clock.offset) / 60))}:${pad(Math.abs(clock.offset) % 60)}`;
+  el.title = `Date and time sent by the station (${clock.table === 0x73 ? "TOT" : "TDT"}${off}), last received ${Math.round(age / 1000)} s ago`;
+}
+
+function resetClock() {
+  clock.base = null;
+  clearInterval(clock.timer);
+  clock.timer = null;
+  renderClock();
+}
+
+listen("broadcast-time", (ev) => {
+  const { service_id, time: t } = ev.payload;
+  if (!state.current || service_id !== state.current.service_id) return;
+  clock.base = Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second);
+  clock.at = performance.now();
+  clock.table = t.table;
+  clock.offset = t.offset_minutes;
+  if (!clock.timer) clock.timer = setInterval(renderClock, 250);
+  renderClock();
 });
 
 listen("player-error", (ev) => {

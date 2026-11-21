@@ -200,8 +200,9 @@ body { display: flex; flex-direction: column; }
 .statusbar {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   padding: 6px 14px;
+  overflow: hidden;
   background: var(--panel);
   border-top: 1px solid var(--line);
   font-size: 12px;
@@ -211,7 +212,9 @@ body { display: flex; flex-direction: column; }
 .meter-val { min-width: 34px; font-variant-numeric: tabular-nums; }
 .bar { width: 90px; height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
 .bar > div { height: 100%; width: 0; background: var(--good); transition: width 0.4s, background 0.4s; }
-.stat { color: var(--muted); font-variant-numeric: tabular-nums; }
+.stat { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; flex: none; }
+/* the longest item gives way first when the window is narrow */
+#rate { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .stat.ok { color: var(--good); }
 .stat.bad { color: var(--bad); }
 
@@ -240,6 +243,10 @@ body { display: flex; flex-direction: column; }
 .scan-found div { padding: 2px 0; }
 .scan-found .ch { color: var(--muted); display: inline-block; min-width: 60px; }
 .dialog-actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
+
+/* broadcast clock */
+.clock { font-variant-numeric: tabular-nums; }
+.clock.stale { opacity: 0.45; }
 
 /* player selector */
 .select {

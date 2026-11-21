@@ -101,6 +101,12 @@ fn demux_file(args: &[String]) -> R {
         d.packets, d.tei_packets, d.cc_errors, pk.sync_losses, d.pat_seen, d.sdt_seen, d.nit_seen, at
     );
     println!("network '{}' ts_id {:?}", d.network_name, d.ts_id);
+    if let Some(t) = d.time {
+        println!(
+            "time {t} (table {:#04x}, offset {:?} min, {} received; the last one)",
+            t.table, t.offset_minutes, d.time_count
+        );
+    }
     for s in d.services() {
         println!(
             "  {:6} sid 0x{:04X} pmt {:?} type {:?} one_seg {} pmt_seen {} '{}' streams {:?}",

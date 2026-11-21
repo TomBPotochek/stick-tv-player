@@ -232,6 +232,12 @@ struct PlayResult {
 }
 
 #[derive(Serialize, Clone)]
+struct TimeEvent {
+    service_id: u16,
+    time: stick_tuner::ts::BroadcastTime,
+}
+
+#[derive(Serialize, Clone)]
 struct SignalEvent {
     service_id: u16,
     signal: Option<SignalStatus>,
@@ -380,6 +386,7 @@ fn play_blocking(
         let mut pk = Packetizer::default();
         let mut demux = Demux::new();
         let mut filter = ServiceFilter::new(sid);
+        let mut times_seen = 0;
         let r = dev2.stream(
             |chunk| {
                 let mut out = Vec::with_capacity(chunk.len());
@@ -390,6 +397,19 @@ fn play_blocking(
                 });
                 if filter.is_ready() {
                     r2.store(true, Ordering::SeqCst);
+                }
+                // broadcast clock (TDT/TOT, every ~5 s)
+                if demux.time_count != times_seen {
+                    times_seen = demux.time_count;
+                    if let Some(time) = demux.time {
+                        let _ = app.emit(
+                            "broadcast-time",
+                            TimeEvent {
+                                service_id: sid,
+                                time,
+                            },
+                        );
+                    }
                 }
                 if out.is_empty() {
                     return true;

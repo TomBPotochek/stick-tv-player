@@ -5,15 +5,18 @@ mod demux;
 mod filter;
 mod section;
 mod text;
+mod time;
 
 pub use demux::{Demux, Service, Stream};
 pub use filter::ServiceFilter;
 pub use text::decode_text;
+pub use time::{parse_time_section, BroadcastTime};
 
 pub const PKT: usize = 188;
 pub const PID_PAT: u16 = 0x0000;
 pub const PID_NIT: u16 = 0x0010;
 pub const PID_SDT: u16 = 0x0011;
+pub const PID_TDT: u16 = 0x0014;
 pub const PID_NULL: u16 = 0x1FFF;
 
 /// CRC-32/MPEG-2 as used by PSI/SI long sections. A section including its CRC field yields 0.
