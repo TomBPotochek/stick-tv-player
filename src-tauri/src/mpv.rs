@@ -47,6 +47,8 @@ pub enum MpvEvent {
     Hwdec { value: String },
     /// A key pressed in the video window (see [`INPUT_CONF`]).
     Key { key: String },
+    /// The stream ended (the connection to the hub closed); the page loads the channel again.
+    Ended,
     /// mpv went away; the next play starts it again.
     Exit,
 }
@@ -102,8 +104,10 @@ impl MpvHost {
     pub fn ensure(&self, app: &AppHandle, data_dir: &Path) -> Result<(), String> {
         let mut run = self.running.lock().unwrap();
         if let Some(r) = run.as_mut() {
-            if matches!(r.child.try_wait(), Ok(None)) {
-                return Ok(());
+            match r.child.try_wait() {
+                Ok(None) => return Ok(()),
+                Ok(Some(st)) => crate::applog!("mpv had exited: {st}"),
+                Err(e) => crate::applog!("mpv status unknown: {e}"),
             }
             *run = None;
         }
@@ -116,11 +120,15 @@ impl MpvHost {
         let conf = data_dir.join("mpv-input.conf");
         std::fs::write(&conf, INPUT_CONF).map_err(|e| e.to_string())?;
         let ipc = ipc_path();
+        // mpv's own log; the previous run's is kept (it has the end of the run that crashed, if one did)
+        let log = data_dir.join("mpv.log");
+        let _ = std::fs::rename(&log, data_dir.join("mpv.prev.log"));
 
         let mut cmd = Command::new(&mpv);
         cmd.arg(format!("--wid={wid}"))
             .arg(format!("--input-ipc-server={ipc}"))
             .arg(format!("--input-conf={}", conf.display()))
+            .arg(format!("--log-file={}", log.display()))
             .args([
                 "--no-config",
                 "--idle=yes",
@@ -149,6 +157,7 @@ impl MpvHost {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("cannot start mpv ({}): {e}", mpv.display()))?;
+        crate::applog!("mpv started: {} (pid {})", mpv.display(), child.id());
 
         let conn = match connect(&ipc, &mut child) {
             Ok(c) => c,
@@ -302,6 +311,13 @@ fn ipc_loop(mut conn: platform::Conn, rx: std::sync::mpsc::Receiver<String>, app
                 while let Some(i) = pending.iter().position(|&b| b == b'\n') {
                     let line: Vec<u8> = pending.drain(..=i).collect();
                     if let Ok(v) = serde_json::from_slice::<Value>(&line) {
+                        if v.get("event").and_then(Value::as_str) == Some("end-file") {
+                            crate::applog!(
+                                "mpv end-file: {} {}",
+                                v.get("reason").and_then(Value::as_str).unwrap_or("?"),
+                                v.get("file_error").and_then(Value::as_str).unwrap_or("")
+                            );
+                        }
                         if let Some(ev) = translate(&v) {
                             let _ = app.emit("mpv-event", ev);
                         }
@@ -321,12 +337,16 @@ fn ipc_loop(mut conn: platform::Conn, rx: std::sync::mpsc::Receiver<String>, app
             Err(RecvTimeoutError::Disconnected) => return,
         }
     }
+    crate::applog!("mpv IPC closed (mpv exited)");
     let _ = app.emit("mpv-event", MpvEvent::Exit);
 }
 
 fn translate(v: &Value) -> Option<MpvEvent> {
     match v.get("event")?.as_str()? {
         "playback-restart" => Some(MpvEvent::Playing),
+        "end-file" if v.get("reason").and_then(Value::as_str) == Some("eof") => {
+            Some(MpvEvent::Ended)
+        }
         "end-file" if v.get("reason").and_then(Value::as_str) == Some("error") => {
             Some(MpvEvent::Error {
                 detail: v

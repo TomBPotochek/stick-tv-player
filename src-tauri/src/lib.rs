@@ -4,6 +4,7 @@
 //! Two players: mpv in a native child window (`mpv`, the stream as broadcast) or the webview's `<video>` fed by an
 //! ffmpeg transcode (`transcode`, for when mpv isn't installed).
 
+mod applog;
 mod hub;
 mod mpv;
 mod transcode;
@@ -181,6 +182,7 @@ fn start_scan(app: AppHandle, state: State<'_, Arc<AppState>>, from: Option<u8>,
 
 #[tauri::command]
 fn stop(state: State<'_, Arc<AppState>>) {
+    applog!("stop");
     state.stop_job();
     state.mpv.stop();
 }
@@ -263,6 +265,10 @@ fn play_blocking(
     sid: u16,
     use_mpv: bool,
 ) -> Result<PlayResult, String> {
+    applog!(
+        "play {freq_khz} kHz service {sid:#06x} ({})",
+        if use_mpv { "mpv" } else { "built-in" }
+    );
     st.stop_job();
     // mpv: the filtered TS goes to the hub as is. Otherwise: through ffmpeg (transcode) to the hub.
     let ffmpeg = if use_mpv {
@@ -306,8 +312,11 @@ fn play_blocking(
     let handle = std::thread::spawn(move || {
         // signal / bitrate monitor
         let (c3, r3, dev3) = (c2.clone(), r2.clone(), dev2.clone());
+        let hub3 = hub.clone();
         let monitor = std::thread::spawn(move || {
             let mut last = (dev3.ts_bytes(), Instant::now());
+            let (mut usb_drops, mut hub_drops) = (dev3.dropped_chunks(), hub3.dropped());
+            let mut locked = true;
             while !c3.load(Ordering::SeqCst) {
                 for _ in 0..10 {
                     if c3.load(Ordering::SeqCst) {
@@ -318,11 +327,29 @@ fn play_blocking(
                 let b = dev3.ts_bytes();
                 let mbit = (b - last.0) as f64 * 8.0 / 1e6 / last.1.elapsed().as_secs_f64();
                 last = (b, Instant::now());
+                let signal = dev3.status().ok();
+                let (u, h) = (dev3.dropped_chunks(), hub3.dropped());
+                if u > usb_drops || h > hub_drops {
+                    applog!(
+                        "dropped: USB {} chunks, player {} chunks (totals {u}, {h})",
+                        u - usb_drops,
+                        h - hub_drops
+                    );
+                    (usb_drops, hub_drops) = (u, h);
+                }
+                let now_locked = signal.as_ref().is_some_and(|s| s.locked);
+                if now_locked != locked {
+                    applog!(
+                        "signal {}: {signal:?}",
+                        if now_locked { "locked" } else { "lost" }
+                    );
+                    locked = now_locked;
+                }
                 let _ = app2.emit(
                     "signal",
                     SignalEvent {
                         service_id: sid,
-                        signal: dev3.status().ok(),
+                        signal,
                         mbit,
                         dropped: dev3.dropped_chunks(),
                         streaming: r3.load(Ordering::SeqCst),
@@ -384,12 +411,14 @@ fn play_blocking(
         let _ = monitor.join();
         drop(tc);
         if let Err(e) = r {
+            applog!("stream error: {e}");
             st2.drop_device();
             let _ = app.emit("player-error", e.to_string());
         } else if ffmpeg_died && !stopped {
             let log = ff_log
                 .map(|l| l.lock().unwrap().trim().to_string())
                 .unwrap_or_default();
+            applog!("ffmpeg stopped: {log}");
             let _ = app.emit("player-error", format!("ffmpeg stopped: {log}"));
         }
     });
@@ -419,6 +448,7 @@ pub fn run() {
             let hub = Arc::new(Hub::default());
             let port = hub.start()?;
             let data_dir = app.path().app_data_dir()?;
+            applog::init(&data_dir);
             app.manage(Arc::new(AppState {
                 dev: Mutex::new(None),
                 job: Mutex::new(None),

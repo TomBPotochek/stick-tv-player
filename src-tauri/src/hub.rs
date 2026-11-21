@@ -5,6 +5,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -15,6 +16,8 @@ const CLIENT_QUEUE: usize = 128;
 #[derive(Default)]
 pub struct Hub {
     clients: Mutex<Vec<SyncSender<Arc<Vec<u8>>>>>,
+    /// Chunks not delivered because a client's queue was full (the player didn't keep up).
+    dropped: AtomicU64,
 }
 
 impl Hub {
@@ -48,9 +51,17 @@ impl Hub {
             .unwrap()
             .retain(|c| match c.try_send(data.clone()) {
                 Ok(()) => true,
-                Err(TrySendError::Full(_)) => true, // slow client: drop this chunk, keep it
+                Err(TrySendError::Full(_)) => {
+                    // slow client: drop this chunk, keep the client
+                    self.dropped.fetch_add(1, Ordering::Relaxed);
+                    true
+                }
                 Err(TrySendError::Disconnected(_)) => false,
             });
+    }
+
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// Ends every open response.

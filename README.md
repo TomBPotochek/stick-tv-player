@@ -53,6 +53,11 @@ The built-in player re-encodes the video, so it uses more CPU; it's there as a f
 - **"Could not tune"** with an error like "not supported" or "access denied": the WinUSB driver isn't bound to the
   stick (step 1 above), or another program has it open.
 - **Status bar says "mpv · CPU decode"**: mpv couldn't use the GPU decoder. It still plays, using more CPU.
+- If mpv stops or its stream ends, the app restarts it and tunes the channel again (up to three times a minute).
+
+The channel list (`channels.json`) and logs are in `%APPDATA%\io.github.tombpotochek.sticktvplayer\`:
+`app.log` (channel changes, stream errors, dropped data, mpv restarts) and `mpv.log` (`mpv.prev.log` is the
+previous run's). Attach them when reporting a problem.
 
 ## Linux
 

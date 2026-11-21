@@ -111,11 +111,35 @@ listen("mpv-event", (ev) => {
   } else if (e.event === "error") {
     state.mpvPlaying = false;
     showMessage("Playback error (mpv)", e.detail);
+  } else if (e.event === "ended") {
+    // only after this channel showed video: an "ended" from the previous channel arrives during a channel change
+    if (state.mpvPlaying && state.playing) recoverMpv("The stream ended");
   } else if (e.event === "exit") {
     state.mpvPlaying = false;
-    showMessage("mpv closed", "Pick the channel again to restart it.");
+    if (state.playing) recoverMpv("mpv stopped");
   }
 });
+
+const restarts = [];
+
+/** Loads the current channel again after mpv died or its stream ended; gives up after 3 times in a minute. */
+function recoverMpv(why) {
+  const now = Date.now();
+  while (restarts.length && now - restarts[0] > 60000) restarts.shift();
+  state.mpvPlaying = false;
+  if (restarts.length >= 3) {
+    state.playing = false;
+    invoke("stop").catch(() => {});
+    showMessage(`${why} again`, "It keeps happening; pick the channel to try again. Details are in app.log / mpv.log in the app data folder.");
+    return;
+  }
+  restarts.push(now);
+  const ch = state.current;
+  showMessage(`${why}, restarting…`);
+  setTimeout(() => {
+    if (state.current === ch && state.mode === "mpv") play(ch);
+  }, 700);
+}
 
 /** Sorted for display: by virtual number when known, else physical channel then service id. */
 function sortChannels(list) {
