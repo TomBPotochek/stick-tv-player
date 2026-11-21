@@ -4,6 +4,8 @@ A desktop app for watching ISDB-T (ISDB-Tb) TV with the portable USB tuner stick
 the ones sold for Android phones. It scans channels, lists them and plays live TV. Video plays in an embedded
 **mpv**, with the channel list and signal meters around it.
 
+![Stick TV Player playing a channel](docs/screenshot.png)
+
 | Stick | USB id |
 |---|---|
 | MyGica/Geniatech PT275C (USB-C) | `048d:e275` |
