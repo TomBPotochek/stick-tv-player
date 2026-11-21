@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stick TV Player</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Stick TV Player</div>
+      <div id="device" class="pill">Looking for the stick…</div>
+      <div class="spacer"></div>
+      <button id="scan-btn" class="btn">Scan channels</button>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <div id="channel-list" class="channel-list"></div>
+        <div id="list-footer" class="list-footer"></div>
+      </aside>
+
+      <section class="stage">
+        <div id="video-wrap" class="video-wrap">
+          <video id="video" playsinline></video>
+          <div id="osd" class="osd hidden">
+            <div class="osd-title"><span id="osd-num" class="num"></span><span id="osd-name"></span></div>
+            <div id="osd-sub" class="osd-sub"></div>
+          </div>
+          <div id="message" class="message">
+            <div class="message-title">No channel selected</div>
+            <div class="message-sub">Scan for channels, then pick one from the list.</div>
+          </div>
+          <button id="unmute" class="unmute hidden">Click to unmute</button>
+        </div>
+        <footer class="statusbar">
+          <div class="meter" title="Signal strength">
+            <span class="meter-label">Signal</span>
+            <div class="bar"><div id="strength-bar"></div></div>
+            <span id="strength-val" class="meter-val">–</span>
+          </div>
+          <div class="meter" title="Signal quality">
+            <span class="meter-label">Quality</span>
+            <div class="bar"><div id="quality-bar"></div></div>
+            <span id="quality-val" class="meter-val">–</span>
+          </div>
+          <div id="lock" class="stat">–</div>
+          <div id="rate" class="stat">–</div>
+          <div class="spacer"></div>
+          <button id="mute-btn" class="icon-btn" title="Mute (M)">🔊</button>
+          <button id="fs-btn" class="icon-btn" title="Fullscreen (F)">⛶</button>
+        </footer>
+      </section>
+    </main>
+
+    <div id="scan-dialog" class="dialog hidden" role="dialog" aria-modal="true">
+      <div class="dialog-box">
+        <h2>Scanning UHF channels 14–51</h2>
+        <div class="progress"><div id="scan-bar"></div></div>
+        <div id="scan-now" class="scan-now">Starting…</div>
+        <div id="scan-found" class="scan-found"></div>
+        <div class="dialog-actions">
+          <button id="scan-cancel" class="btn secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

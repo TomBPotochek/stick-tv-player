@@ -1,0 +1,20 @@
+[package]
+name = "stick-tuner"
+description = "Userspace driver for ITE IT9175 ISDB-T USB sticks (PT275 / PT275C) plus a small MPEG-TS demux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "stick_tuner"
+
+[[bin]]
+name = "stick-cli"
+path = "src/bin/stick-cli.rs"
+
+[dependencies]
+# vendored = build libusb from source and link it statically: no DLL to ship.
+rusb = { version = "0.9.4", features = ["vendored"] }
+log = "0.4"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }

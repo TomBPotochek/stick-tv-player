@@ -1,0 +1,5 @@
+[toolchain]
+# Tauri 2.12 needs rustc >= 1.90. rustup installs this automatically on first build.
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
