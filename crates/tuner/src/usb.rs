@@ -211,6 +211,14 @@ impl Stick {
         Ok(())
     }
 
+    /// USB port reset (the stick re-enumerates). Clears a chip left wedged by a process killed mid-stream; the
+    /// handle must be dropped and the stick reopened afterwards.
+    pub fn reset_device(&self) -> Result<()> {
+        self.handle
+            .reset()
+            .map_err(|e| Error(format!("USB reset: {e}")))
+    }
+
     pub fn product_id(&self) -> u16 {
         self.pid
     }
@@ -368,10 +376,14 @@ impl Stick {
         let mut alive = self.write_registers(PROC_OFDM, 0xec4c, &[0xa8]);
         std::thread::sleep(Duration::from_millis(10));
         if !alive {
-            alive = self.read_registers(PROC_OFDM, 0x46, 1).is_some();
+            alive = self.ofdm_alive();
         }
         if !alive {
-            return err("OFDM processor does not answer");
+            self.note("OFDM silent after 0xec4c; trying the wake-up steps");
+            alive = self.wake_ofdm();
+        }
+        if !alive {
+            return err("OFDM processor does not answer: unplug the stick and plug it back in");
         }
         let fw_ofdm = self.firmware_version(PROC_OFDM);
         self.note(format!(
@@ -388,6 +400,49 @@ impl Stick {
         }
         *self.tuner.lock().unwrap() = Some(t);
         Ok(())
+    }
+
+    fn ofdm_alive(&self) -> bool {
+        self.read_registers(PROC_OFDM, 0x46, 1).is_some()
+    }
+
+    fn set_bit0(&self, proc: u8, addr: u32) {
+        if let Some(v) = self.read_registers(proc, addr, 1) {
+            self.write_registers(proc, addr, &[v[0] | 1]);
+        }
+    }
+
+    /// Wakes an OFDM processor that does not answer (e.g. after a process was killed mid-stream). Same steps as
+    /// OpenDTV's UsbTunerSource.diagnoseOfdm: A) vendor DRV_ApCtrl: five firmware-version pings, OFDM 0xec40 = 1;
+    /// B) power-saving exit: LINK 0xe00c = 0, OFDM 0xf84f = 0 then 1; C) LINK GPIO enable bits.
+    fn wake_ofdm(&self) -> bool {
+        for _ in 0..5 {
+            self.firmware_version(PROC_LINK);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.write_registers(PROC_OFDM, 0xec40, &[1]);
+        std::thread::sleep(Duration::from_millis(10));
+        if self.ofdm_alive() {
+            self.note("OFDM woke up after ApCtrl (0xec40 = 1)");
+            return true;
+        }
+        self.write_registers(PROC_LINK, 0xe00c, &[0]);
+        self.write_registers(PROC_OFDM, 0xf84f, &[0]);
+        self.write_registers(PROC_OFDM, 0xf84f, &[1]);
+        std::thread::sleep(Duration::from_millis(50));
+        if self.ofdm_alive() {
+            self.note("OFDM woke up after power-saving exit");
+            return true;
+        }
+        for r in [0xd8c8, 0xd8c9, 0xd8bc, 0xd8bd] {
+            self.set_bit0(PROC_LINK, r);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        if self.ofdm_alive() {
+            self.note("OFDM woke up after the GPIO enable bits");
+            return true;
+        }
+        false
     }
 
     /// LINK firmware version string ("3.0.4.6"), if the firmware runs.

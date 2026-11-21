@@ -91,7 +91,16 @@ cargo run -p stick-tuner --bin stick-cli -- tune 25 --service E780 -o - | ffplay
 cargo run -p stick-tuner --bin stick-cli -- demux ch25.ts                           # list services in a file
 ```
 
-Add `-v` for the driver log (firmware download, chip ids, register failures).
+Add `-v` for the driver log (firmware download, chip ids, register failures). `stick-cli reset` does a USB
+port reset.
+
+### Troubleshooting
+
+- **"OFDM processor does not answer"**: the chip's demodulator core is wedged, which has happened after the app
+  was force-killed mid-stream. The firmware keeps running across a USB reset, and the wake-up steps (ported from
+  OpenDTV) don't revive it, so unplug the stick and plug it back in.
+- **Channels lock but no services are found**: the signal is too weak (quality shows a few %). Move the antenna
+  and rescan.
 
 ## How it works
 
@@ -129,9 +138,20 @@ They send 576i/1080i as **field pictures** (PAFF), with open GOPs: the first pic
 (an I picture, never an IDR) reference pictures from before it. ffmpeg/VLC conceal that. Chromium's decoder,
 which WebView2 and Edge use, aborts with `PIPELINE_ERROR_DECODE: Failed to send video packet for decoding`, and its
 hardware decoder doesn't take field pictures at all. Merging field pairs into one sample and dropping leading
-pictures wasn't enough (the reorder lists still point at missing pictures), so the video is re-encoded.
-`yadif` deinterlaces only frames flagged interlaced, then `libx264 -preset veryfast -tune zerolatency`.
-SD costs a few percent of a core, 1080i about one core. Picture appears ~4–5 s after a channel change.
+pictures wasn't enough (the reorder lists still point at missing pictures), so the video is re-encoded:
+`yadif` deinterlaces only frames flagged interlaced, then a GPU encoder if one works, else x264. The app tries
+NVENC (NVIDIA), Quick Sync (Intel), AMF (AMD) and libx264 in that order with a short test encode, and decodes with
+`-hwaccel auto`. The status bar shows which encoder is in use. Set `STICK_TV_ENCODER=libx264` (or another name)
+to force one. CPU time for 5.4 s of 576i on a GTX 1660 Ti machine:
+
+| Encoder | CPU time | ≈ share of one core |
+|---|---|---|
+| libx264 veryfast, software decode | 1.30 s | 24% |
+| h264_qsv, GPU decode | 0.61 s | 11% |
+| h264_nvenc, GPU decode | 0.31 s | 6% |
+
+Picture appears ~4–5 s after a channel change. The way to avoid re-encoding altogether is a native video
+surface (e.g. embedding mpv) instead of the webview's `<video>`.
 
 ## ITE firmware (please read)
 

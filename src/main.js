@@ -179,6 +179,7 @@ async function play(ch) {
     return;
   }
   if (token !== state.playToken) return;
+  state.encoder = { h264_nvenc: "NVENC", h264_qsv: "Quick Sync", h264_amf: "AMF", libx264: "x264 (CPU)" }[res.encoder] || res.encoder;
   if (!res.locked) {
     showMessage("No signal", "The tuner did not lock on this channel. Check the antenna; it keeps trying.");
   } else {
@@ -327,7 +328,7 @@ listen("signal", (ev) => {
   const lock = $("lock");
   lock.textContent = sig.locked ? (sig.dbm != null ? `Locked · ${sig.dbm} dBm` : "Locked") : "No lock";
   lock.className = `stat ${sig.locked ? "ok" : "bad"}`;
-  $("rate").textContent = `${s.mbit.toFixed(1)} Mbit/s${s.dropped ? ` · dropped ${s.dropped}` : ""}`;
+  $("rate").textContent = `${s.mbit.toFixed(1)} Mbit/s${s.dropped ? ` · dropped ${s.dropped}` : ""}${state.encoder ? ` · ${state.encoder}` : ""}`;
   if (!s.streaming && sig.locked && !$("message").classList.contains("hidden")) {
     showMessage("Waiting for the service…", "Looking for this channel's program table in the stream.");
   }

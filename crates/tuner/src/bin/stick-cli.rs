@@ -23,6 +23,9 @@ fn main() {
         Some("status") => status(&args[1..]),
         Some("tune") => tune(&args[1..]),
         Some("demux") => demux_file(&args[1..]),
+        Some("reset") => Stick::open(None, 0)
+            .and_then(|s| s.reset_device())
+            .map_err(|e| e.into()),
         Some("filter") => filter_file(&args[1..]),
         _ => {
             eprintln!("usage: stick-cli list | scan [--from 14] [--to 51] | status CH | tune CH [-o FILE] [--seconds N] [--service SID] | demux FILE | filter IN SID OUT  [-v]");

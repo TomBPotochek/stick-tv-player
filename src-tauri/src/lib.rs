@@ -183,6 +183,8 @@ fn stop(state: State<'_, Arc<AppState>>) {
 struct PlayResult {
     locked: bool,
     url: String,
+    /// ffmpeg video encoder in use (h264_nvenc, h264_qsv, h264_amf or libx264).
+    encoder: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -217,6 +219,7 @@ fn play_blocking(
     st.stop_job();
     let ffmpeg = transcode::find_ffmpeg()
         .ok_or("ffmpeg not found: it should be installed next to the app, or put ffmpeg.exe on PATH (see README)")?;
+    let enc: &'static transcode::Encoder = transcode::encoder(&ffmpeg);
     // One retry with a freshly opened device: the stick may have been replugged since the last use.
     let (dev, locked) = match st.device().and_then(|d| {
         d.tune(freq_khz, false)
@@ -272,7 +275,7 @@ fn play_blocking(
                 );
             }
         });
-        let mut tc = match transcode::Transcoder::start(&ffmpeg, move |ts| hub.broadcast(ts)) {
+        let mut tc = match transcode::Transcoder::start(&ffmpeg, enc, move |ts| hub.broadcast(ts)) {
             Ok(t) => t,
             Err(e) => {
                 c2.store(true, Ordering::SeqCst);
@@ -325,6 +328,7 @@ fn play_blocking(
         .map(|d| d.as_millis())
         .unwrap_or(0);
     Ok(PlayResult {
+        encoder: enc.name.to_string(),
         locked,
         url: format!("http://127.0.0.1:{}/live.ts?sid={sid}&t={t}", st.port),
     })
